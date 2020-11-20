@@ -83,23 +83,29 @@ async function checkStory(page: puppetteer.Page) {
   // NB: I hate this so much
   for (let retry = 0; retry < 3; retry++) {
     let off = await selectedTreeItemOffset(page)
-    await page.keyboard.press('ArrowRight', { delay: 50 })
-    await page.keyboard.press('Enter', { delay: 50 })
+    await page.keyboard.press('ArrowRight', { delay: 150 })
+    await page.keyboard.press('Enter', { delay: 150 })
 
     let newOff = await selectedTreeItemOffset(page)
     if (newOff && off !== newOff) {
+      dv('right worked!')
       break
     }
 
     off = await selectedTreeItemOffset(page)
-    await page.keyboard.press('ArrowDown', { delay: 50 })
-    await page.keyboard.press('Enter', { delay: 50 })
+    await page.keyboard.press('ArrowDown', { delay: 150 })
+    await page.keyboard.press('Enter', { delay: 150 })
 
     newOff = await selectedTreeItemOffset(page)
     if (newOff && off !== newOff) {
+      dv('down worked!')
       break
     }
   }
+
+  // NB: Wait for animations to clear or else we'll get false positives
+  // about contrast
+  await delay(1000)
 
   return { result, name }
 }
@@ -124,21 +130,21 @@ async function navigateToFirstStory(page: puppetteer.Page, port: number) {
   await page.click('#storybook-explorer-tree .sidebar-item')
 
   for (let retries = 0; retries < 3; retries++) {
-    await page.keyboard.press('ArrowRight', { delay: 50 })
-    await page.keyboard.press('Enter', { delay: 50 })
+    await page.keyboard.press('ArrowDown', { delay: 150 })
+    await page.keyboard.press('Enter', { delay: 150 })
 
     if (((await selectedTreeItemOffset(page)) ?? 0) > 0) {
+      dv('down worked!')
       break
     }
 
-    await page.keyboard.press('ArrowDown', { delay: 50 })
-    await page.keyboard.press('Enter', { delay: 50 })
+    await page.keyboard.press('ArrowRight', { delay: 150 })
+    await page.keyboard.press('Enter', { delay: 150 })
 
     if (((await selectedTreeItemOffset(page)) ?? 0) > 0) {
+      dv('right worked!')
       break
     }
-
-    await page.click('#storybook-explorer-tree .sidebar-item')
   }
 }
 

@@ -1,3 +1,5 @@
+#!/usr/bin/node
+
 import * as path from 'path'
 
 import puppetteer from 'puppeteer'
@@ -162,7 +164,11 @@ export async function main(): Promise<number> {
       number: true,
     })
     .option('screenshot', {
-      describe: 'Dump screenshots of every component',
+      describe: 'Dump screenshots of components that fail',
+      boolean: true,
+    })
+    .option('screenshot-all', {
+      describe: 'Dump screenshots of all components',
       boolean: true,
     })
     .help().argv
@@ -177,7 +183,6 @@ export async function main(): Promise<number> {
   serveDirectory(path.resolve(argv.storybook))
   await navigateToFirstStory(page, argv.port)
 
-  let i = 0
   let selectedOffset = -1
   d('Starting checks')
   while (true) {
@@ -185,12 +190,15 @@ export async function main(): Promise<number> {
       checkStory(page)
     )
 
-    if (argv.screenshot) await page.screenshot({ path: `./screenshot${i}.png` })
+    if (argv['screenshot-all'])
+      await page.screenshot({ path: `./screenshot-${name}.png` })
 
     try {
       const violations = filterInvalidWarnings(JSON.parse(result).violations)
       if (violations.length > 0) {
         dv(JSON.stringify(violations, null, 2))
+        if (argv.screenshot)
+          await page.screenshot({ path: `./failed-${name}.png` })
 
         console.log(`###\n### ${name}:\n###\n`)
         const violationMsgs = violations.map((v) => {
@@ -206,8 +214,6 @@ export async function main(): Promise<number> {
     } catch (e) {
       console.log(`Couldn't parse! ${result}`)
     }
-
-    i++
 
     // NB: The selected item will cycle around back to the top of the page
     // once we arrow past the bottom

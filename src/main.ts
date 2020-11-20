@@ -1,10 +1,12 @@
 import * as path from 'path'
-import puppetteer from 'puppeteer'
 
+import puppetteer from 'puppeteer'
+import * as yargs from 'yargs'
 import serve from 'serve-handler'
 import * as http from 'http'
 
-const ROOT_DIR = path.resolve(__dirname, '..')
+const d = require('debug')('storybook-axe-audit')
+const dv = require('debug')('storybook-axe-audit:verbose')
 
 function waitForOneConsoleLine(frame: puppetteer.Page): Promise<string> {
   return new Promise((res) => {
@@ -12,14 +14,20 @@ function waitForOneConsoleLine(frame: puppetteer.Page): Promise<string> {
   })
 }
 
-function selectedTreeItemOffset(page: puppetteer.Page): Promise<number> {
-  return page.evaluate(
+let wat = 1
+async function selectedTreeItemOffset(
+  page: puppetteer.Page
+): Promise<number | null> {
+  const ret = await page.evaluate(
     () =>
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
       (document.querySelector(
-        '#storybook-explorer-menu [data-selected="true"]'
-      ) as any).offsetTop
+        '#storybook-explorer-tree [data-selected="true"]'
+      ) as any)?.offsetTop
   )
+
+  dv(`selected offset: ${ret}`)
+  return ret ?? null
 }
 
 const FILTER_RE_LIST = [
@@ -39,12 +47,28 @@ function delay(ms: number) {
   return new Promise((res) => setTimeout(() => res(true), ms))
 }
 
-async function checkStory(page: puppetteer.Page) {
-  const iframe = page.frames().find((x) => x.url().match(/iframe/))!
+async function screenshotIfFailed<T>(
+  page: puppetteer.Page,
+  block: () => Promise<T>
+) {
+  try {
+    return await block()
+  } catch (e) {
+    await page.screenshot({ path: 'failed.png' })
+    throw e
+  }
+}
 
+async function checkStory(page: puppetteer.Page) {
+  const iframe = page.frames().find((x) => x.url().match(/iframe/))
+  if (!iframe) {
+    throw new Error("Couldn't find story content!")
+  }
+
+  // NB: Figure out how to plumb errors from axe.run()
   await iframe.addScriptTag({ url: 'http://localhost:9876/axe.min.js' })
   await iframe.addScriptTag({
-    content: 'window.axe.run().then(x => { console.log(JSON.stringify(x)) })',
+    content: 'window.axe.run().then(x => console.log(JSON.stringify(x)))',
   })
 
   const result = await waitForOneConsoleLine(page)
@@ -62,7 +86,8 @@ async function checkStory(page: puppetteer.Page) {
     await page.keyboard.press('ArrowRight', { delay: 50 })
     await page.keyboard.press('Enter', { delay: 50 })
 
-    if (off !== (await selectedTreeItemOffset(page))) {
+    let newOff = await selectedTreeItemOffset(page)
+    if (newOff && off !== newOff) {
       break
     }
 
@@ -70,7 +95,8 @@ async function checkStory(page: puppetteer.Page) {
     await page.keyboard.press('ArrowDown', { delay: 50 })
     await page.keyboard.press('Enter', { delay: 50 })
 
-    if (off !== (await selectedTreeItemOffset(page))) {
+    newOff = await selectedTreeItemOffset(page)
+    if (newOff && off !== newOff) {
       break
     }
   }
@@ -78,41 +104,89 @@ async function checkStory(page: puppetteer.Page) {
   return { result, name }
 }
 
-export async function main(): Promise<number> {
+function serveDirectory(dir: string) {
+  d(`Serving directory: ${dir}`)
   const srv = http.createServer((req, resp) => {
-    void serve(req, resp, {
-      public: path.resolve(ROOT_DIR, 'storybook-static'),
-    })
+    void serve(req, resp, { public: dir })
   })
 
   srv.listen(9876)
+}
 
+async function navigateToFirstStory(page: puppetteer.Page, port: number) {
+  dv('Navigating')
+  await page.goto(`http://localhost:${port}`)
+
+  await page.waitForSelector(
+    '#storybook-explorer-tree [data-nodetype="component"]'
+  )
+
+  await page.click('#storybook-explorer-tree .sidebar-item')
+
+  for (let retries = 0; retries < 3; retries++) {
+    await page.keyboard.press('ArrowRight', { delay: 50 })
+    await page.keyboard.press('Enter', { delay: 50 })
+
+    if (((await selectedTreeItemOffset(page)) ?? 0) > 0) {
+      break
+    }
+
+    await page.keyboard.press('ArrowDown', { delay: 50 })
+    await page.keyboard.press('Enter', { delay: 50 })
+
+    if (((await selectedTreeItemOffset(page)) ?? 0) > 0) {
+      break
+    }
+
+    await page.click('#storybook-explorer-tree .sidebar-item')
+  }
+}
+
+export async function main(): Promise<number> {
+  const argv = yargs
+    .option('storybook', {
+      describe:
+        'Path to your compiled Storybook directory (create with build-storybook)',
+      require: true,
+      string: true,
+    })
+    .option('port', {
+      describe: 'The port of the local internal HTTP server',
+      default: 9876,
+      number: true,
+    })
+    .option('screenshot', {
+      describe: 'Dump screenshots of every component',
+      boolean: true,
+    })
+    .help().argv
+
+  d('Initializing browser')
   const browser = await puppetteer.launch()
+  dv('new page!')
   const page = await browser.newPage()
+  dv('viewport!')
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 })
 
-  await page.goto('http://localhost:9876')
-
-  await page.waitForSelector('#components-flag')
-  await page.click('#storybook-explorer-menu button')
-
-  await page.keyboard.press('Enter')
-
-  await page.keyboard.press('ArrowDown', { delay: 50 })
-  await page.keyboard.press('ArrowRight', { delay: 50 })
-  await page.keyboard.press('Enter', { delay: 50 })
+  serveDirectory(path.resolve(argv.storybook))
+  await navigateToFirstStory(page, argv.port)
 
   let i = 0
   let selectedOffset = -1
+  d('Starting checks')
   while (true) {
-    const { result, name } = await checkStory(page)
-    //await page.screenshot({ path: `./screenshot${i}.png` })
+    const { result, name } = await screenshotIfFailed(page, () =>
+      checkStory(page)
+    )
+
+    if (argv.screenshot) await page.screenshot({ path: `./screenshot${i}.png` })
 
     try {
       const violations = filterInvalidWarnings(JSON.parse(result).violations)
       if (violations.length > 0) {
+        dv(JSON.stringify(violations, null, 2))
+
         console.log(`###\n### ${name}:\n###\n`)
-        //console.log(JSON.stringify(violations, null, 2))
         const violationMsgs = violations.map((v) => {
           const nodeMsgs = (v.nodes as any[]).map(
             (n) => `Summary: ${n.failureSummary}\n${n.html}\n`
@@ -132,7 +206,12 @@ export async function main(): Promise<number> {
     // NB: The selected item will cycle around back to the top of the page
     // once we arrow past the bottom
     const newSelectedOffset = await selectedTreeItemOffset(page)
+    if (!newSelectedOffset) {
+      throw new Error('We should always have an item here!')
+    }
+
     if (selectedOffset > newSelectedOffset) {
+      dv(`${selectedOffset} > ${newSelectedOffset}`)
       break
     } else {
       selectedOffset = newSelectedOffset

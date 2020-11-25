@@ -125,8 +125,8 @@ async function navigateToFirstStory(page: puppetteer.Page, port: number) {
   dv('Navigating')
   await page.goto(`http://localhost:${port}`)
 
-  await page.waitForSelector(
-    '#storybook-explorer-tree [data-nodetype="component"]'
+  await screenshotIfFailed(page, () =>
+    page.waitForSelector('#storybook-explorer-tree [data-nodetype="component"]')
   )
 
   await page.click('#storybook-explorer-tree .sidebar-item')

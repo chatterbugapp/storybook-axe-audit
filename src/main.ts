@@ -1,5 +1,6 @@
 #!/usr/bin/node
 
+import * as fs from 'fs'
 import * as path from 'path'
 
 import puppetteer from 'puppeteer'
@@ -179,6 +180,14 @@ export async function main(): Promise<number> {
   const page = await browser.newPage()
   dv('viewport!')
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 })
+
+  const targetDir = path.resolve(argv.storybook)
+
+  d('Copying in axe-audit')
+  fs.writeFileSync(
+    path.join(targetDir, 'axe.min.js'),
+    fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8')
+  )
 
   serveDirectory(path.resolve(argv.storybook))
   await navigateToFirstStory(page, argv.port)

@@ -151,6 +151,27 @@ async function navigateToFirstStory(page: puppetteer.Page, port: number) {
   }
 }
 
+function writeAxeJsonAsSummary(
+  name: string,
+  violations: any[],
+  screenshotPath?: string
+) {
+  console.log(`###\n### ${name}:\n###\n`)
+  if (screenshotPath) {
+    console.log(screenshotPath)
+  }
+
+  const violationMsgs = violations.map((v) => {
+    const nodeMsgs = (v.nodes as any[]).map(
+      (n) => `Summary: ${n.failureSummary}\n${n.html}\n`
+    )
+
+    return `Description: ${v.description}\n${nodeMsgs.join('\n')}`
+  })
+
+  console.log(violationMsgs.join('\n') + '\n')
+}
+
 export async function main(): Promise<number> {
   const argv = yargs
     .option('storybook', {
@@ -170,6 +191,10 @@ export async function main(): Promise<number> {
     })
     .option('screenshot-all', {
       describe: 'Dump screenshots of all components',
+      boolean: true,
+    })
+    .option('json', {
+      describe: 'Instead of human-readable output, write the raw JSON',
       boolean: true,
     })
     .help().argv
@@ -192,6 +217,8 @@ export async function main(): Promise<number> {
   serveDirectory(path.resolve(argv.storybook))
   await navigateToFirstStory(page, argv.port)
 
+  const violationSummary: Record<string, any> = {}
+
   let selectedOffset = -1
   d('Starting checks')
   while (true) {
@@ -199,29 +226,37 @@ export async function main(): Promise<number> {
       checkStory(page)
     )
 
-    if (argv['screenshot-all'])
+    if (argv['screenshot-all']) {
       await page.screenshot({ path: `./screenshot-${name}.png` })
+    }
 
     try {
       const violations = filterInvalidWarnings(JSON.parse(result).violations)
       if (violations.length > 0) {
         dv(JSON.stringify(violations, null, 2))
-        if (argv.screenshot)
-          await page.screenshot({ path: `./failed-${name}.png` })
 
-        console.log(`###\n### ${name}:\n###\n`)
-        const violationMsgs = violations.map((v) => {
-          const nodeMsgs = (v.nodes as any[]).map(
-            (n) => `Summary: ${n.failureSummary}\n${n.html}\n`
+        const screenshotPath = path.resolve(`./failed-${name}.png`)
+        if (argv.screenshot) {
+          await page.screenshot({ path: screenshotPath })
+        }
+
+        const screenshotInfo = argv.screenshot ? { screenshotPath } : {}
+
+        violationSummary[name] = {
+          ...screenshotInfo,
+          violations,
+        }
+
+        if (!argv.json) {
+          writeAxeJsonAsSummary(
+            name,
+            violations,
+            argv.screenshot ? screenshotPath : undefined
           )
-
-          return `Description: ${v.description}\n${nodeMsgs.join('\n')}`
-        })
-
-        console.log(violationMsgs.join('\n') + '\n')
+        }
       }
     } catch (e) {
-      console.log(`Couldn't parse! ${result}`)
+      console.log(`Couldn't parse! ${e.message}\n${e.stack}`)
     }
 
     // NB: The selected item will cycle around back to the top of the page
@@ -239,7 +274,16 @@ export async function main(): Promise<number> {
     }
   }
 
-  return 0
+  const violationLength = Object.keys(violationSummary).length
+  if (argv.json) {
+    console.log(JSON.stringify(violationSummary))
+  } else {
+    if (violationLength === 0) {
+      console.log('🎉🎉🎉🎉 No a11y warnings found!!! 🎉🎉🎉🎉')
+    }
+  }
+
+  return violationLength > 0 ? -1 : 0
 }
 
 if (require.main === module) {

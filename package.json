@@ -1,6 +1,6 @@
 {
   "name": "@chatterbug/storybook-axe-audit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run all of your Storybook stories through axe-audit",
   "main": "index.js",
   "scripts": {
